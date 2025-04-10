@@ -10,6 +10,7 @@ public class HeadshotOnlyConfig : BasePluginConfig
 {
     [JsonPropertyName("PluginEnabled")] public bool PluginEnabled { get; set; } = true;
     [JsonPropertyName("AlwaysEnableHsOnly")] public bool AlwaysEnableHsOnly { get; set; } = false;
+    [JsonPropertyName("scaleEnabled")] public bool ScaleEnabled { get; set; } = true;
     [JsonPropertyName("AdminFlagtoForceHsOnly")] public string AdminFlagtoForceHsOnly { get; set; } = "@css/root";
     [JsonPropertyName("RequiredKills")] public int RequiredKills { get; set; } = 35;
     [JsonPropertyName("executeCommand")] public string ExecuteCommand { get; set; } = "";
@@ -73,6 +74,7 @@ public class HeadshotOnly : BasePlugin, IPluginConfig<HeadshotOnlyConfig>
 
     private HookResult OnPlayerConnectFull(EventPlayerConnectFull @event, GameEventInfo info)
     {
+        if(Config.ScaleEnabled == false) return HookResult.Continue;
         var player = @event.Userid;
         if (player != null && player.IsValid)
         {
@@ -103,7 +105,7 @@ public class HeadshotOnly : BasePlugin, IPluginConfig<HeadshotOnlyConfig>
 
     private HookResult OnPlayerDeath(EventPlayerDeath @event, GameEventInfo info)
     {
-        if(!adminHeadshotOnly) return HookResult.Continue;
+        if(!adminHeadshotOnly || Config.ScaleEnabled == false) return HookResult.Continue;
         var attacker = @event.Attacker;
         var victim = @event.Userid;
 
@@ -155,7 +157,7 @@ public class HeadshotOnly : BasePlugin, IPluginConfig<HeadshotOnlyConfig>
 
     private void SetPlayerScale(CCSPlayerController player, float scale)
     {
-        if (!player.IsValid || player.PlayerPawn.Value == null) return;
+        if (!player.IsValid || player.PlayerPawn.Value == null || Config.ScaleEnabled == false) return;
 
         var pawn = player.PlayerPawn.Value;
         var skeleton = pawn.CBodyComponent?.SceneNode?.GetSkeletonInstance();
