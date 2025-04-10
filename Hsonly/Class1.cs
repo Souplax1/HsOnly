@@ -4,9 +4,6 @@ using CounterStrikeSharp.API.Modules.Utils;
 using CounterStrikeSharp.API.Modules.Admin;
 using CounterStrikeSharp.API.Modules.Commands;
 using System.Text.Json.Serialization;
-using CounterStrikeSharp.API.Modules.Entities;
-using System;
-
 namespace Hsonly;
 
 public class HeadshotOnlyConfig : BasePluginConfig
@@ -15,6 +12,8 @@ public class HeadshotOnlyConfig : BasePluginConfig
     [JsonPropertyName("AlwaysEnableHsOnly")] public bool AlwaysEnableHsOnly { get; set; } = false;
     [JsonPropertyName("AdminFlagtoForceHsOnly")] public string AdminFlagtoForceHsOnly { get; set; } = "@css/root";
     [JsonPropertyName("RequiredKills")] public int RequiredKills { get; set; } = 35;
+    [JsonPropertyName("executeCommand")] public string ExecuteCommand { get; set; } = "";
+    [JsonPropertyName("message")] public string Message { get; set; } = "You have won VIP!";
 }
 
 public class HeadshotOnly : BasePlugin, IPluginConfig<HeadshotOnlyConfig>
@@ -129,8 +128,11 @@ public class HeadshotOnly : BasePlugin, IPluginConfig<HeadshotOnlyConfig>
             if (actionTracking.MatchStats.Kills >= Config.RequiredKills)
             {
                 adminHeadshotOnly = false;
-                Server.PrintToChatAll($"[{ChatColors.Gold}HS Only{ChatColors.Default}] {ChatColors.Green}{attacker.PlayerName} {ChatColors.Default}направи {ChatColors.Red}{Config.RequiredKills} {ChatColors.Default}kills и получи {ChatColors.Green}VIP ");
-                Server.ExecuteCommand($"css_vp_player_addgroup {attacker.SteamID} 7200 vip1");
+                Server.PrintToChatAll($"[{ChatColors.Gold}HS Only{ChatColors.Default}] {attacker.PlayerName} {ChatColors.Green} {Config.Message}");
+                if(!string.IsNullOrEmpty(Config.ExecuteCommand))
+                {
+                    Server.ExecuteCommand(Config.ExecuteCommand);
+                }
             }
         }
 
