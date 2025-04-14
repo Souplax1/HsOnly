@@ -3,7 +3,9 @@ using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Utils;
 using CounterStrikeSharp.API.Modules.Admin;
 using CounterStrikeSharp.API.Modules.Commands;
+using System.Collections.Generic;
 using System.Text.Json.Serialization;
+
 namespace Hsonly;
 
 public class HeadshotOnlyConfig : BasePluginConfig
@@ -12,136 +14,115 @@ public class HeadshotOnlyConfig : BasePluginConfig
     [JsonPropertyName("AlwaysEnableHsOnly")] public bool AlwaysEnableHsOnly { get; set; } = false;
     [JsonPropertyName("scaleEnabled")] public bool ScaleEnabled { get; set; } = true;
     [JsonPropertyName("AdminFlagtoForceHsOnly")] public string AdminFlagtoForceHsOnly { get; set; } = "@css/root";
+    [JsonPropertyName("EnableReward")] public bool EnableReward { get; set; } = false;
     [JsonPropertyName("RequiredKills")] public int RequiredKills { get; set; } = 35;
     [JsonPropertyName("executeCommand")] public string ExecuteCommand { get; set; } = "";
-    [JsonPropertyName("message")] public string Message { get; set; } = "You have won VIP!";
+    [JsonPropertyName("message")] public string Message { get; set; } = "You won.";
+    [JsonPropertyName("MaxScale")] public float MaxScale { get; set; } = 1.5f;
+    [JsonPropertyName("MinScale")] public float MinScale { get; set; } = 0.5f;
 }
 
 public class HeadshotOnly : BasePlugin, IPluginConfig<HeadshotOnlyConfig>
 {
     public override string ModuleName => "HS only";
-    public override string ModuleVersion => "1.0.0";
+    public override string ModuleVersion => "1.1.0";
     public override string ModuleAuthor => "Yeezy";
     public override string ModuleDescription => "Enable/Disable Headshot Only with size scaling based on kills/deaths";
 
     public required HeadshotOnlyConfig Config { get; set; }
 
-    public bool[] g_Headshot = new bool[64];
-    public float[] g_PlayerScale = new float[64];
-    public bool adminHeadshotOnly = false;
+    private readonly Dictionary<int, bool> _playerHsEnabled = new();
+    private readonly Dictionary<int, float> _playerScales = new();
+    private bool _adminHeadshotOnly;
 
-    public void OnConfigParsed(HeadshotOnlyConfig config)
-    {
-        Config = config;
-    }
+    public void OnConfigParsed(HeadshotOnlyConfig config) => Config = config;
 
     public override void Load(bool hotReload)
     {
-        // Initialize player scales
-        for (int i = 0; i < g_PlayerScale.Length; i++)
-        {
-            g_PlayerScale[i] = 1.0f;
-        }
+        AddCommand("css_hs", "Toggle Headshot only", OnAdminHsCommand);
 
-        AddCommand("css_hs", "Toggle Headshot only", cmd_AdminHsOnly);
-
-        RegisterEventHandler<EventPlayerHurt>((@event, info) =>
-        {
-            var player = @event.Userid;
-            var attacker = @event.Attacker;
-
-            if (!Config.PluginEnabled || player == null || attacker == null || !player.IsValid || !attacker.IsValid)
-                return HookResult.Continue;
-
-            if (player.TeamNum == attacker.TeamNum && !(@event.DmgHealth > 0 || @event.DmgArmor > 0))
-                return HookResult.Continue;
-
-            if (g_Headshot[attacker.Slot] || adminHeadshotOnly || Config.AlwaysEnableHsOnly)
-            {
-                if (@event.Hitgroup != 1)
-                {
-                    player.PlayerPawn.Value.Health += @event.DmgHealth;
-                    player.PlayerPawn.Value.ArmorValue += @event.DmgArmor;
-                }
-            }
-            return HookResult.Continue;
-        });
-
+        RegisterEventHandler<EventPlayerHurt>(OnPlayerHurt);
         RegisterEventHandler<EventPlayerDeath>(OnPlayerDeath);
         RegisterEventHandler<EventPlayerConnectFull>(OnPlayerConnectFull);
-        RegisterEventHandler<EventPlayerSpawn>(OnPlayerSpawn);
+        RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect);
+        RegisterEventHandler<EventRoundStart>(OnRoundStart);
     }
 
-    private HookResult OnPlayerConnectFull(EventPlayerConnectFull @event, GameEventInfo info)
+    private HookResult OnPlayerHurt(EventPlayerHurt @event, GameEventInfo info)
     {
-        if(Config.ScaleEnabled == false) return HookResult.Continue;
-        var player = @event.Userid;
-        if (player != null && player.IsValid)
-        {
-            int slot = player.Slot;
-            if (slot >= 0 && slot < g_PlayerScale.Length)
-            {
-                g_PlayerScale[slot] = 1.0f;
-                SetPlayerScale(player, 1.0f);
-            }
-        }
+        if (!Config.PluginEnabled || Config.AlwaysEnableHsOnly) return HookResult.Continue;
+
+        var victim = @event.Userid;
+        var attacker = @event.Attacker;
+
+        if (!ValidatePlayers(victim, attacker)) return HookResult.Continue;
+        if (victim.Team == attacker.Team) return HookResult.Continue;
+
+        var hsRequired = _adminHeadshotOnly || _playerHsEnabled.GetValueOrDefault(attacker.Slot, false);
+        if (!hsRequired) return HookResult.Continue;
+
+        RestoreDamage(victim,@event.Hitgroup, @event.DmgHealth, @event.DmgArmor);
         return HookResult.Continue;
     }
 
-    private HookResult OnPlayerSpawn(EventPlayerSpawn @event, GameEventInfo info)
+    private void RestoreDamage(CCSPlayerController player,int hitgroup, int healthDamage, int armorDamage)
     {
-        var player = @event.Userid;
-        if (player != null && player.IsValid && player.PlayerPawn.Value != null)
+        if (!player.PawnIsAlive || player.PlayerPawn.Value == null) return;
+
+        if (hitgroup != 1)
         {
-            int slot = player.Slot;
-            if (slot >= 0 && slot < g_PlayerScale.Length)
-            {
-                SetPlayerScale(player, g_PlayerScale[slot]);
-             
-            }
+            player.PlayerPawn.Value.Health += healthDamage;
+            player.PlayerPawn.Value.ArmorValue += armorDamage;
         }
-        return HookResult.Continue;
     }
 
     private HookResult OnPlayerDeath(EventPlayerDeath @event, GameEventInfo info)
     {
-        if(!adminHeadshotOnly || Config.ScaleEnabled == false) return HookResult.Continue;
         var attacker = @event.Attacker;
         var victim = @event.Userid;
 
-        // Handle size scaling
-        if (attacker != null && attacker.IsValid && attacker != victim)
+        if (Config.ScaleEnabled && attacker != null && attacker.IsValid && attacker != victim)
         {
-            g_PlayerScale[attacker.Slot] = Math.Min(g_PlayerScale[attacker.Slot] + 0.03f, 1.5f);
-            SetPlayerScale(attacker, g_PlayerScale[attacker.Slot]);
+            UpdatePlayerScale(attacker, Config.MaxScale, 0.03f);
         }
 
-        if (victim != null && victim.IsValid)
+        if (Config.ScaleEnabled && victim != null && victim.IsValid)
         {
-            g_PlayerScale[victim.Slot] = Math.Max(g_PlayerScale[victim.Slot] - 0.03f, 0.5f);   
+            UpdatePlayerScale(victim, Config.MinScale, -0.03f);
         }
 
-        // VIP reward logic
-        if (adminHeadshotOnly && attacker != null && attacker.IsValid && attacker != victim)
+        if (Config.EnableReward && attacker != null && attacker.IsValid)
         {
-            var actionTracking = attacker.ActionTrackingServices;
-            if (actionTracking?.MatchStats == null) return HookResult.Continue;
-
-            if (actionTracking.MatchStats.Kills >= Config.RequiredKills)
-            {
-                adminHeadshotOnly = false;
-                Server.PrintToChatAll($"[{ChatColors.Gold}HS Only{ChatColors.Default}] {attacker.PlayerName} {ChatColors.Green} {Config.Message}");
-                if(!string.IsNullOrEmpty(Config.ExecuteCommand))
-                {
-                    Server.ExecuteCommand(Config.ExecuteCommand);
-                }
-            }
+            CheckForReward(attacker);
         }
 
         return HookResult.Continue;
     }
 
-    private void cmd_AdminHsOnly(CCSPlayerController? player, CommandInfo commandInfo)
+    private void UpdatePlayerScale(CCSPlayerController player, float limit, float delta)
+    {
+        var currentScale = _playerScales.GetValueOrDefault(player.Slot, 1.0f);
+        Server.PrintToChatAll($"[{ChatColors.Gold}HS Only{ChatColors.Default}] {player.PlayerName} {ChatColors.Green}Scale: {currentScale}");
+        var newScale = System.Math.Clamp(currentScale + delta, Config.MinScale, Config.MaxScale);
+
+        _playerScales[player.Slot] = newScale;
+        SetPlayerScale(player, newScale);
+    }
+
+    private void CheckForReward(CCSPlayerController player)
+    {
+        var kills = player.ActionTrackingServices?.MatchStats?.Kills ?? 0;
+        if (kills >= Config.RequiredKills)
+        {
+            Server.PrintToChatAll($"[{ChatColors.Gold}HS Only{ChatColors.Default}] {player.PlayerName} {ChatColors.Green}{Config.Message}");
+            if (!string.IsNullOrEmpty(Config.ExecuteCommand))
+            {
+                Server.ExecuteCommand(Config.ExecuteCommand.Replace("{STEAMID}", player.SteamID.ToString()));
+            }
+        }
+    }
+
+    private void OnAdminHsCommand(CCSPlayerController? player, CommandInfo commandInfo)
     {
         if (!Config.PluginEnabled || Config.AlwaysEnableHsOnly || player == null || !player.IsValid) return;
 
@@ -151,13 +132,14 @@ public class HeadshotOnly : BasePlugin, IPluginConfig<HeadshotOnlyConfig>
             return;
         }
 
-        adminHeadshotOnly = !adminHeadshotOnly;
-        Server.PrintToChatAll($"[{ChatColors.Gold}HS Only{ChatColors.Default}] {(adminHeadshotOnly ? ChatColors.Green + "Enabled" : ChatColors.Red + "Disabled")}");
+        _adminHeadshotOnly = !_adminHeadshotOnly;
+        var status = _adminHeadshotOnly ? $"{ChatColors.Green}Enabled" : $"{ChatColors.Red}Disabled";
+        Server.PrintToChatAll($"[{ChatColors.Gold}HS Only{ChatColors.Default}] {status}");
     }
 
     private void SetPlayerScale(CCSPlayerController player, float scale)
     {
-        if (!player.IsValid || player.PlayerPawn.Value == null || Config.ScaleEnabled == false) return;
+        if (!player.PawnIsAlive || player.PlayerPawn.Value == null) return;
 
         var pawn = player.PlayerPawn.Value;
         var skeleton = pawn.CBodyComponent?.SceneNode?.GetSkeletonInstance();
@@ -172,5 +154,51 @@ public class HeadshotOnly : BasePlugin, IPluginConfig<HeadshotOnlyConfig>
                 Utilities.SetStateChanged(pawn, "CBaseEntity", "m_CBodyComponent");
             }
         });
+    }
+
+    private HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info)
+    {
+        foreach (var player in Utilities.GetPlayers())
+        {
+            if (player?.IsValid == true && _playerScales.TryGetValue(player.Slot, out var scale))
+            {
+                SetPlayerScale(player, scale); // Reapply the stored scale
+            }
+        }
+        return HookResult.Continue;
+    }
+
+
+    private HookResult OnPlayerConnectFull(EventPlayerConnectFull @event, GameEventInfo info)
+    {
+        var player = @event.Userid;
+        if (player?.IsValid == true)
+        {
+            _playerScales[player.Slot] = 1.0f;
+            _playerHsEnabled[player.Slot] = false;
+        }
+        return HookResult.Continue;
+    }
+
+    private HookResult OnPlayerDisconnect(EventPlayerDisconnect @event, GameEventInfo info)
+    {
+        var player = @event.Userid;
+        if (player?.IsValid == true)
+        {
+            _playerScales.Remove(player.Slot);
+            _playerHsEnabled.Remove(player.Slot);
+        }
+        return HookResult.Continue;
+    }
+
+
+    private static bool ValidatePlayers(params CCSPlayerController[] players)
+    {
+        foreach (var player in players)
+        {
+            if (player == null || !player.IsValid || !player.PawnIsAlive || player.PlayerPawn.Value == null)
+                return false;
+        }
+        return true;
     }
 }
